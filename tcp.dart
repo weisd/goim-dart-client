@@ -1,9 +1,35 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'dart:convert';
+import 'dart:async';
 import 'dart:mirrors';
+import 'dart:convert';
+
+const rawHeaderLen = 16;
+const packetOffset = 0;
+const headerOffset = 4;
+const verOffset = 6;
+const opOffset = 8;
+const seqOffset = 12;
+
+// OpHeartbeat heartbeat
+const OpHeartbeat = 2;
+// OpHeartbeatReply heartbeat reply
+const OpHeartbeatReply = 3;
+// OpSendMsg send message.
+const OpSendMsg = 4;
+// OpSendMsgReply  send message reply
+const OpSendMsgReply = 5;
+// OpAuth auth connnect
+const OpAuth = 7;
+// OpAuthReply auth connect reply
+const OpAuthReply = 8;
+// OpRaw raw message
+const OpRaw = 9;
+
+const intervalTimeout = const Duration(seconds: 3);
 
 Socket socket;
+Timer timer;
 
 void main() async {
   socket = await Socket.connect("localhost", 3101);
@@ -13,69 +39,119 @@ void main() async {
   var auth =
       '{"mid":123, "room_id":"live://1000", "platform":"web", "accepts":[1000,1001,1002]}';
 
-  var authBytes = auth.codeUnits;
-
-  var headerLen = 16;
-  var packgeLen = authBytes.length + headerLen;
-
-  var message = Uint8List(headerLen);
-  var protoBuffer = ByteData.view(message.buffer);
-
-  var offset = 0;
-  protoBuffer.setInt32(offset, packgeLen);
-  offset += 4;
-  protoBuffer.setInt16(offset, headerLen);
-  offset += 2;
-  protoBuffer.setInt16(offset, 1);
-  offset += 2;
-  protoBuffer.setInt32(offset, 7);
-  offset += 4;
-  protoBuffer.setInt32(offset, 1);
-  offset += 4;
-
-  socket.add(message);
-  socket.add(authBytes);
-
+  sendMsg(OpAuth, auth);
   sleep(const Duration(seconds: 5));
 }
 
 void onData(data) {
-  // List<int> header;
+  var buf = Uint8List.fromList(data).buffer;
 
-  // List.copyRange(header, 16, data);
+  var byteData = buf.asByteData();
 
-  // var headerData = ByteData.view(Int8List.fromList(header).buffer);
+  var packetLen = byteData.getInt32(packetOffset);
+  var headerLen = byteData.getInt16(headerOffset);
+  // var ver = byteData.getInt16(verOffset);
+  var op = byteData.getInt32(opOffset);
+  // var seq = byteData.getInt32(seqOffset);
 
-  // var offset = 0;
-  // var packageLen = headerData.getInt32(offset);
-  // offset += 4;
-  // var headerLen = headerData.getInt16(offset);
-  // offset += 2;
-  // var ver = headerData.getInt16(offset);
-  // offset += 2;
-  // var opretion = headerData.getInt32(offset);
-  // offset += 4;
+  switch (op) {
+    case OpAuthReply: // auth rev
+      // todo send heartbeat
+      sendMsg(OpHeartbeat, null);
 
-  // print(packageLen);
-  // print(headerLen);
-  // print(ver);
-  // print(opretion);
+      timer = Timer.periodic(intervalTimeout, (Timer t) {
+        heartbeat();
+      });
 
-  print(new String.fromCharCodes(data, 16));
+      break;
+    case OpHeartbeatReply: // heartbeat rev
+      print("OpHeartbeatReply");
+
+      break;
+    case OpRaw: // raw
+      for (var offset = rawHeaderLen;
+          offset < data.length;
+          offset += packetLen) {
+        packetLen = byteData.getInt32(offset);
+        headerLen = byteData.getInt16(offset + headerOffset);
+        // ver = byteData.getInt16(verOffset);
+        op = byteData.getInt32(offset + opOffset);
+        // seq = byteData.getInt32(seqOffset);
+
+        print(packetLen);
+        print(headerLen);
+        print(offset + headerLen);
+        print(offset + packetLen);
+
+        messageReceived((new String.fromCharCodes(
+            data.sublist(offset + headerLen, offset + packetLen))));
+      }
+      break;
+    default:
+      // print("default");
+      print(op);
+      print(packetLen);
+      print(headerLen);
+
+      print(packetLen - headerLen);
+
+      // if (packetLen - headerLen > data.length) {
+      print(byteData.lengthInBytes);
+      // }
+
+      messageReceived(
+          (new String.fromCharCodes(data.sublist(headerLen, packetLen))));
+  }
+}
+
+void messageReceived(String msg) {
+  print(msg);
+  var data = jsonDecode(msg);
+  print(data);
 }
 
 void onError(error, StackTrace trace) {
   print(error);
 }
 
-//
 void onDone() {
-  print("done");
-  socket.close();
-  socket.destroy();
-  exit(0);
+  if (socket != null) {
+    socket.close();
+    socket.destroy();
+  }
+
+  if (timer != null) {
+    timer.cancel();
+  }
 }
 
 getTypeName(dynamic obj) {
   return reflect(obj).type.reflectedType.toString();
+}
+
+void heartbeat() {
+  sendMsg(OpHeartbeat, null);
+}
+
+void sendMsg(int op, String msg) {
+  var packgeLen = rawHeaderLen;
+  var body = null;
+  if (msg != null) {
+    body = msg.codeUnits;
+    packgeLen = body.length + rawHeaderLen;
+  }
+
+  var message = Uint8List(rawHeaderLen);
+  var byteData = ByteData.view(message.buffer);
+
+  byteData.setInt32(packetOffset, packgeLen);
+  byteData.setInt16(headerOffset, rawHeaderLen);
+  byteData.setInt16(verOffset, 1);
+  byteData.setInt32(opOffset, op);
+  byteData.setInt32(seqOffset, 1);
+
+  socket.add(message);
+  if (msg != null) {
+    socket.add(body);
+  }
 }
