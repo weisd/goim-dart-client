@@ -99,6 +99,10 @@ void onData(data) {
       print(byteData.lengthInBytes);
       // }
 
+      print(data);
+
+      print(data.sublist(headerLen, packetLen));
+
       messageReceived(
           (new String.fromCharCodes(data.sublist(headerLen, packetLen))));
   }
